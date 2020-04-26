@@ -1,0 +1,44 @@
+cabal-version: 1.12
+name:           phaser-csv
+version:        0.1.0.0
+description:    Please see the README on GitHub at <https://github.com/quickdudley/phaser-csv#readme>
+homepage:       https://github.com/quickdudley/phaser-csv#readme
+bug-reports:    https://github.com/quickdudley/phaser-csv/issues
+author:         Jeremy List
+maintainer:     quick_dudley@gmail.com
+copyright:      2020 Jeremy List
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+    ChangeLog.md
+
+source-repository head
+  type: git
+  location: https://github.com/quickdudley/phaser-csv
+
+library
+  exposed-modules:
+      Codec.Phaser.CSV
+  other-modules:
+      Paths_phaser_csv
+  hs-source-dirs:
+      src
+  build-depends:
+      base >=4.7 && <5,
+      phaser
+  default-language: Haskell2010
+
+test-suite phaser-csv-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_phaser_csv
+  hs-source-dirs:
+      test
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , phaser-csv
+  default-language: Haskell2010

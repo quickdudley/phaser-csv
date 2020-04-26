@@ -1,0 +1,48 @@
+name:                phaser-csv
+version:             0.1.0.0
+github:              "quickdudley/phaser-csv"
+license:             BSD3
+author:              "Jeremy List"
+maintainer:          "quick_dudley@gmail.com"
+copyright:           "2020 Jeremy List"
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/quickdudley/phaser-csv#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+
+library:
+  source-dirs: src
+
+executables:
+  phaser-csv-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - phaser-csv
+
+tests:
+  phaser-csv-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - phaser-csv
