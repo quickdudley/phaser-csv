@@ -1,6 +1,10 @@
 {-# LANGUAGE GADTs, LambdaCase, ScopedTypeVariables #-}
 module Codec.Phaser.CSV (
-
+  ByHeader,
+  column,
+  optColumn,
+  stringRow,
+  byHeader,
  ) where
 
 import Codec.Phaser
@@ -8,9 +12,13 @@ import Codec.Phaser.Core (eof, fromAutomaton)
 import Control.Applicative
 import Data.Char
 import Data.Foldable
+import Data.List (intercalate)
 
 inlineSpace :: Char -> Bool
 inlineSpace = (&&) <$> isSpace <*> (/= '\n')
+
+stringCell :: Monoid p => Phase p Char o String
+stringCell = fromAutomaton $ cell >># many get
 
 cell :: Monoid p => Phase p Char Char ()
 cell = (<|> eof) $ get >>= \case
@@ -18,7 +26,7 @@ cell = (<|> eof) $ get >>= \case
   ',' -> put1 ','
   '\n' -> put1 '\n'
   c
-    | isSpace c -> cell
+    | inlineSpace c -> cell
     | otherwise -> yield c *> gouq
  where
   goq = get >>= \case
@@ -42,47 +50,67 @@ cell = (<|> eof) $ get >>= \case
         yield c *>
         gouq
 
-data FromHeaders p o a where
-  CellH :: String -> Phase p Char o a -> FromHeaders p o a
-  SomeH :: FromHeaders p o (a -> b) -> FromHeaders p o a
-    -> FromHeaders p o b
-  PureH :: a -> FromHeaders p o a
+stringRow :: Monoid p => Phase p Char o [String]
+stringRow = sepBy (fromAutomaton $ cell >># many get) (char ',') <*
+  (eof <|> (() <$ char '\n'))
 
-instance Monoid p => Functor (FromHeaders p o) where
-  fmap f (CellH h p) = CellH h (fmap f p)
+column :: String -> Phase p Char o a -> ByHeader p o a
+column h p = CellH h Nothing p
+
+optColumn :: String -> a -> Phase p Char o a -> ByHeader p o a
+optColumn h d p = CellH h (Just d) p
+
+data ByHeader p o a where
+  CellH :: String -> Maybe a -> Phase p Char o a -> ByHeader p o a
+  SomeH :: ByHeader p o (a -> b) -> ByHeader p o a
+    -> ByHeader p o b
+  PureH :: a -> ByHeader p o a
+
+instance Monoid p => Functor (ByHeader p o) where
+  fmap f (CellH h d p) = CellH h (fmap f d) (fmap f p)
   fmap f (SomeH l r) = SomeH (fmap (f .) l) r
   fmap f (PureH a) = PureH (f a)
 
-instance Monoid p => Applicative (FromHeaders p o) where
+instance Monoid p => Applicative (ByHeader p o) where
   pure = PureH
   PureH f <*> a = fmap f a
   f <*> PureH a = fmap ($ a) f
   f <*> a = SomeH f a
 
 data FHBuild p o a where
-  NewH :: FromHeaders p o a -> FHBuild p o a
+  NewH :: ByHeader p o a -> FHBuild p o a
   DoneH :: Phase p Char o a -> FHBuild p o a
-  Partial :: Phase p Char o (a -> b) -> FromHeaders p o a -> FHBuild p o b
+  Partial :: Phase p Char o (a -> b) -> ByHeader p o a -> FHBuild p o b
 
-fromHeaders :: forall p o a . Monoid p => [String] -> FromHeaders p o a -> Phase p Char o a
-fromHeaders hs b = let
-  ignoreCell :: Phase p Char o ()
+byHeader :: forall p p' o o' a . (Monoid p, Monoid p') =>
+  ByHeader p o a -> Phase p' Char o' (Phase p Char o a)
+byHeader b = let
+  ignoreCell :: Monoid p0 => Phase p0 Char o0 ()
   ignoreCell = fromAutomaton $
     cell >># let loop = (get *> loop) <|> pure () in loop
-  build _ (DoneH p) = p <* sepBy ignoreCell (char ',')
-  build [] _ = fail "Required columns are not present"
-  build (a:r) (NewH b) = case fill a b of
-    Just (DoneH p) -> p
-    Just p@(Partial _ _) -> build r p
-    Just (NewH b') -> build r (Partial (id <$ ignoreCell) b')
-    _ -> build r (Partial (id <$ ignoreCell) b)
-  build (a:r) (Partial p b) = case fill a b of
-    Just (DoneH p') -> (p <*> p') <* sepBy ignoreCell (char ',')
-    Just (NewH z) -> build r (Partial (p <* char ',' <* ignoreCell) z)
-    Just (Partial p' b') -> build r (Partial ((.) <$> p <*> (char ',' *> p')) b')
-    Nothing -> build r (Partial (p <* char ',' <* ignoreCell) b)
-  fill :: String -> FromHeaders p o x -> Maybe (FHBuild p o x)
-  fill h (CellH h' p)
+  headerCell :: Monoid p0 => Phase p0 Char o0 String
+  headerCell = (<* ((() <$ char ',') <|> eof)) $ stringCell >>= \case
+    "" -> "" <$ ((char ',' *> put1 ',') <|> (char '\n' *> put1 '\n'))
+    h -> return h
+  finishRow :: Monoid p0 => Phase p0 Char o0 ()
+  finishRow = let
+    loop = ((ignoreCell *> char ',' *> loop) <|> pure ())
+    in loop <* (eof <|> (() <$ char '\n'))
+  build (DoneH p) = Right p <$ finishRow
+  build (NewH b) = (headerCell >>= \a -> case fill a b of
+     Just (DoneH p) -> Right p <$ finishRow
+     Just p@(Partial _ _) -> build p
+     Just (NewH b') -> build (Partial (id <$ ignoreCell) b')
+     _ -> build (Partial (id <$ ignoreCell) b)
+   ) <|> (fin b <$ finishRow)
+  build (Partial p b) = (headerCell >>= \a -> case fill a b of
+    Just (DoneH p') -> Right (p <*> p') <$ finishRow
+    Just (NewH z) -> build (Partial (p <* char ',' <* ignoreCell) z)
+    Just (Partial p' b') -> build (Partial ((.) <$> p <*> (char ',' *> p')) b')
+    Nothing -> build (Partial (p <* char ',' <* ignoreCell) b)
+   ) <|> (((p <*>) <$> fin b) <$ finishRow)
+  fill :: String -> ByHeader p o x -> Maybe (FHBuild p o x)
+  fill h (CellH h' _ p)
     | h == h' = Just (DoneH $ fromAutomaton $ cell >># p)
   fill h (SomeH f a) = case fill h f of
     Just (DoneH p) -> Just $ Partial p a
@@ -96,4 +124,22 @@ fromHeaders hs b = let
         ((,) <$> f <*> b')
       Nothing -> Nothing
   fill _ _ = Nothing
-  in build hs (NewH b)
+  fin :: ByHeader p o x -> Either [String] (Phase p Char o x)
+  fin (CellH h Nothing _) = Left [h]
+  fin (CellH _ (Just r) _) = Right (pure r)
+  fin (SomeH f a) = case (fin f, fin a) of
+    (Left fe, Left ae) -> Left (fe ++ ae)
+    (Left e, _) -> Left e
+    (_, Left e) -> Left e
+    (Right a, Right b) -> Right (a <*> b)
+  in build (NewH b) >>= \case
+    Left e -> fail $ case e of
+      [e'] -> "Required column " ++ e' ++ " is missing"
+      _ -> "Required columns " ++ intercalate ", " e ++ " are missing"
+    Right p -> return p
+
+test :: Monoid p => Phase p Char o [(Integer,Integer)]
+test = do
+  p <- byHeader $
+    (,) <$> column "a" regular <*> column "b" regular
+  many p
